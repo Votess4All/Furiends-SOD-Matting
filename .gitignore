@@ -1,0 +1,5 @@
+saved_models/
+test_data/
+wandb/
+augment/
+figures/
