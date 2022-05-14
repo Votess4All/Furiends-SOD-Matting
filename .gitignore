@@ -4,3 +4,4 @@ wandb/
 augment/
 figures/
 __pycache__/
+*.png
