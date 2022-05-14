@@ -3,3 +3,4 @@ test_data/
 wandb/
 augment/
 figures/
+__pycache__/
