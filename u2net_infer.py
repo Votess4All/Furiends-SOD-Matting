@@ -7,6 +7,7 @@ import torch
 
 from model import U2NET # full size version 173.6 MB
 from model import U2NETP # small version u2net 4.7 MB
+from src.models.modnet import MODNet
 
 
 def norm_pred(d):
@@ -31,7 +32,7 @@ def save_output(image_name, img_org, pred, d_dir):
     concat_result = np.concatenate([img_org, composed], axis=1)
 
     img_name = os.path.splitext(os.path.basename(image_name))[0]
-    # cv2.imwrite(os.path.join(d_dir, img_name+".png"), predict_np)
+    cv2.imwrite(os.path.join(d_dir, img_name+".png"), predict_np)
     # cv2.imwrite(os.path.join(d_dir, "composed_"+img_name+".jpg"), composed)
     cv2.imwrite(os.path.join(d_dir, "concat_"+img_name+".jpg"), concat_result)
 
@@ -49,6 +50,7 @@ def preprocess(image):
     
         return image
 
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     image = resize(image, (320, 320))
     image = normalize(image)
     image = image.transpose((2, 0, 1))
@@ -74,12 +76,16 @@ def load_model(model_name, model_dir):
     elif model_name.split("_")[0] == "u2netp":
         print("...load U2NEP---4.7 MB")
         net = U2NETP(3, 1)
+    elif model_name.split("_")[0] == "modnet":
+        net = MODNet()
     
     if torch.cuda.is_available():
-        net.load_state_dict(torch.load(os.path.join(model_dir, model_name)))
+        net.load_state_dict(torch.load(os.path.join(model_dir, model_name))["model_state_dict"])
+        # net.load_state_dict(torch.load(os.path.join(model_dir, model_name)))
         net.cuda()
     else:
-        net.load_state_dict(torch.load(os.path.join(model_dir, model_name), map_location='cpu'))
+        net.load_state_dict(torch.load(os.path.join(model_dir, model_name)["model_state_dict"], map_location='cpu'))
+        # net.load_state_dict(torch.load(os.path.join(model_dir, model_name), map_location='cpu'))
     net.eval()
 
     return net
@@ -88,13 +94,13 @@ def load_model(model_name, model_dir):
 @torch.no_grad()
 def main():
 
-    model_name = "u2net_bce_itr_2000_train_0.625475_tar_0.069431.pth"  #u2netp
+    model_name = "u2net_bce_itr_1000_trainloss_0.201_tar_1.516.pth"  #u2netp
     image_dir = os.path.join(os.getcwd(), 'test_data', 'furiends_test_images')
     prediction_dir = os.path.join(os.getcwd(), 'test_data', model_name + f'_results_{image_dir.split("/")[-1]}' + os.sep)
-    model_dir = "/data/pengyuyan/code/bilibili/matting/U-2-Net-master/saved_models/u2net/0513_exp2_bg_augmented/"
+    model_dir = "/data/docker/pengyuyan/models/u2net/0521_exp2_bg_augmented/"
 
     img_name_list = glob.glob(image_dir + os.sep + '*')
-    print(img_name_list)
+    print(len(img_name_list))
 
     net = load_model(model_name, model_dir)
 
@@ -109,10 +115,13 @@ def main():
         pred = d1[:, 0, :, :]
         pred = norm_pred(pred)
 
+        # _, _, matte = net(img_tensor, True)
+
         # save results to test_results folder
         if not os.path.exists(prediction_dir):
             os.makedirs(prediction_dir, exist_ok=True)
         save_output(img_name_list[i], img_arr, pred, prediction_dir)
+        # save_output(img_name_list[i], img_arr, matte, prediction_dir)
 
 
 if __name__ == "__main__":

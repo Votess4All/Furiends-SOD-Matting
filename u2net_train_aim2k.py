@@ -20,9 +20,9 @@ from data_loader import RandomCrop
 from data_loader import RandomFlip
 from data_loader import Rescale
 from data_loader import RescaleT
-from data_loader import SalObjDataset
+from data_loader import MatObjDataset
 from data_loader import ToTensor
-from data_loader import ToTensorLab
+from data_loader import ToTensorLab_Mat
 
 from model import U2NET
 from model import U2NETP
@@ -145,21 +145,50 @@ def validate(val_loader, net, device, epoch, step):
         "val/vis": wandb.Image(np.vstack(stack_images), caption="Input|Label|Pred|Composed"),
     }
     wandb.log(wandb_dict)
+    return avg_loss0 / len(val_loader), avg_total_loss / len(val_loader) 
         
 
-
-def make_train_dataloader(batch_size_train):
-    data_dir = "/data/docker/pengyuyan/dataset/AIM-2k"
-    tra_image_dir = "train/original"
-    tra_label_dir = "train/mask"
-    image_ext = '.jpg'
-    label_ext = '.png'
+def get_train_list(data_dir, tra_image_dir, tra_label_dir, image_ext='.jpg', label_ext='.png'):
     
     tra_img_name_list = glob.glob(os.path.join(data_dir, tra_image_dir, '*'+image_ext))
     tra_img_name_list.sort()
 
     tra_lbl_name_list = glob.glob(os.path.join(data_dir, tra_label_dir, '*'+label_ext)) 
     tra_lbl_name_list.sort()
+    return tra_img_name_list, tra_lbl_name_list
+
+
+def make_train_dataloader(batch_size_train):
+    train_datasets = {
+        "AIM-train": {
+            "data_dir":"/data/docker/pengyuyan/dataset/AIM-2k",
+            "tra_image_dir": "train/original",
+            "tra_label_dir": "train/mask",
+        },
+        "AIM-val": {
+            "data_dir":"/data/docker/pengyuyan/dataset/AIM-2k",
+            "tra_image_dir": "validation/original",
+            "tra_label_dir": "validation/mask",
+        },
+        "google-stray-cats-hd": {
+            "data_dir": "/data/docker/pengyuyan/dataset/google_image_downloader/furiends/stray_cats_hd",
+            "tra_image_dir": "images",
+            "tra_label_dir": "masks",
+        },
+        "google-stray-dogs-hd": {
+            "data_dir": "/data/docker/pengyuyan/dataset/google_image_downloader/furiends/stray_dogs_hd",
+            "tra_image_dir": "images",
+            "tra_label_dir": "masks",
+        },
+    }
+
+    tra_img_name_list, tra_lbl_name_list = [], []
+    for key, value in train_datasets.items():
+        data_dir, tra_image_dir, tra_label_dir = value["data_dir"], value["tra_image_dir"], value["tra_label_dir"]
+        img_list, label_list = get_train_list(data_dir, tra_image_dir, tra_label_dir)
+        tra_img_name_list.extend(img_list)
+        tra_lbl_name_list.extend(label_list)
+    
 
     print("---")
     print("train images: ", len(tra_img_name_list))
@@ -168,15 +197,15 @@ def make_train_dataloader(batch_size_train):
 
     train_num = len(tra_img_name_list)
 
-    salobj_dataset = SalObjDataset(
+    salobj_dataset = MatObjDataset(
 	img_name_list=tra_img_name_list,
 	lbl_name_list=tra_lbl_name_list,
 	transform=transforms.Compose([
-		ChangeBG(bg_dir="/data/docker/pengyuyan/dataset/google_image_downloader/furiends"),
+		ChangeBG(bg_dir="/data/docker/pengyuyan/dataset/google_image_downloader/furiends/bg"),
 		RescaleT(320),
 		RandomCrop(288),
 		RandomFlip(),
-		ToTensorLab(flag=0)]))
+		ToTensorLab_Mat()]))
 
     salobj_dataloader = DataLoader(
         salobj_dataset, 
@@ -186,39 +215,39 @@ def make_train_dataloader(batch_size_train):
     return train_num, salobj_dataloader
 
 
-def make_val_dataloader(batch_size_val):
-    data_dir = "/data/docker/pengyuyan/dataset/AIM-2k"
-    val_image_dir = "validation/original"
-    val_label_dir = "validation/mask"
-    image_ext = '.jpg'
-    label_ext = '.png'
+# def make_val_dataloader(batch_size_val):
+#     data_dir = "/data/docker/pengyuyan/dataset/AIM-2k"
+#     val_image_dir = "validation/original"
+#     val_label_dir = "validation/mask"
+#     image_ext = '.jpg'
+#     label_ext = '.png'
     
-    val_img_name_list = glob.glob(os.path.join(data_dir, val_image_dir, '*'+image_ext))
-    val_img_name_list.sort()
+#     val_img_name_list = glob.glob(os.path.join(data_dir, val_image_dir, '*'+image_ext))
+#     val_img_name_list.sort()
 
-    val_lbl_name_list = glob.glob(os.path.join(data_dir, val_label_dir, '*'+label_ext)) 
-    val_lbl_name_list.sort()
+#     val_lbl_name_list = glob.glob(os.path.join(data_dir, val_label_dir, '*'+label_ext)) 
+#     val_lbl_name_list.sort()
 
-    print("---")
-    print("val images: ", len(val_img_name_list))
-    print("val labels: ", len(val_lbl_name_list))
-    print("---")
+#     print("---")
+#     print("val images: ", len(val_img_name_list))
+#     print("val labels: ", len(val_lbl_name_list))
+#     print("---")
 
-    val_num = len(val_img_name_list)
+#     val_num = len(val_img_name_list)
 
-    salobj_dataset = SalObjDataset(
-    img_name_list=val_img_name_list,
-    lbl_name_list=val_lbl_name_list,
-    transform=transforms.Compose([
-        RescaleT(320),
-        ToTensorLab(flag=0)]))
+#     salobj_dataset = SalObjDataset(
+#     img_name_list=val_img_name_list,
+#     lbl_name_list=val_lbl_name_list,
+#     transform=transforms.Compose([
+#         RescaleT(320),
+#         ToTensorLab(flag=0)]))
 
-    salobj_dataloader = DataLoader(
-        salobj_dataset, 
-        batch_size=batch_size_val, 
-        shuffle=False, num_workers=1)
+#     salobj_dataloader = DataLoader(
+#         salobj_dataset, 
+#         batch_size=batch_size_val, 
+#         shuffle=False, num_workers=1)
 
-    return val_num, salobj_dataloader
+#     return val_num, salobj_dataloader
 
 
 def train():
@@ -234,7 +263,7 @@ def train():
 
     # ------- 2. set the directory of training dataset --------
     model_name = 'u2net' #'u2netp'
-    model_dir = os.path.join(f"./saved_models/{model_name}/0513_exp2_bg_augmented/")
+    model_dir = os.path.join(f"/data/docker/pengyuyan/models/{model_name}/0521_exp2_bg_augmented/")
     os.makedirs(model_dir, exist_ok=True)
 
     epoch_num = 100000
@@ -242,7 +271,7 @@ def train():
     batch_size_val = 1
 
     train_num, train_salobj_dataloader = make_train_dataloader(batch_size_train)
-    val_num, val_salobj_dataloader = make_val_dataloader(batch_size_val)
+    # val_num, val_salobj_dataloader = make_val_dataloader(batch_size_val)
     
     # ------- 3. define model --------
     # define the net
@@ -251,7 +280,7 @@ def train():
         net = U2NET(3, 1)
         net.load_state_dict(torch.load("saved_models/u2net/u2net.pth", map_location=device), strict=True)
 
-        # start_epoch, step, _ = load_checkpoint("", net, device=device)
+        # start_epoch, step, _ = load_checkpoint("/data/docker/pengyuyan/models/u2net/0521_exp1_bg_augmented/u2net_bce_itr_12000_trainloss_0.022_tar_0.219.pth", net, device=device)
 
     elif(model_name == 'u2netp'):
         net = U2NETP(3,1)
@@ -262,14 +291,14 @@ def train():
 
     # ------- 4. define optimizer --------
     print("---define optimizer...")
-    optimizer = optim.Adam(net.parameters(), lr=1e-3, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
+    optimizer = optim.Adam(net.parameters(), lr=1e-2, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
 
     # ------- 5. training process --------
     print("---start training...")
     ite_num = 0
-    running_loss = 0.0
-    running_tar_loss = 0.0
-    ite_num4val = 0
+    # running_loss = 0.0
+    # running_tar_loss = 0.0
+    # ite_num4val = 0
     save_frq = 500 # save the model every 2000 iterations
     log_interval = 10
 
@@ -278,9 +307,9 @@ def train():
 
         for i, data in enumerate(train_salobj_dataloader):
             ite_num = ite_num + 1
-            ite_num4val = ite_num4val + 1
+            # ite_num4val = ite_num4val + 1
 
-            inputs, labels = data['image'], data['label']
+            inputs, labels = data['image'], data['gt_matte']
 
             inputs = inputs.type(torch.FloatTensor)
             labels = labels.type(torch.FloatTensor)
@@ -299,42 +328,43 @@ def train():
             loss.backward()
             optimizer.step()
 
-            # # print statistics
-            running_loss += loss.item()
-            running_tar_loss += loss2.item()
+            # # # print statistics
+            # running_loss += loss.item()
+            # running_tar_loss += loss2.item()
 
             wandb_dict = {
                 "train/global_epoch": epoch + 1,
                 "train/global_step": ite_num,
-                "train/loss0": running_loss / ite_num4val,
-                "train/sum_loss": running_tar_loss / ite_num4val,
+                "train/loss0": loss2.item(),
+                "train/sum_loss": loss.item(),
             }
             wandb.log(wandb_dict)
 
             if ite_num % log_interval == 0:
-                print("[epoch: %3d/%3d, batch: %5d/%5d, ite: %d] train loss: %3f, tar: %3f " % (\
+                print("[epoch: %3d/%3d, batch: %5d/%5d, ite: %d] train loss0: %3f, train loss sum: %3f " % (\
                     epoch + 1, epoch_num, (i + 1) * batch_size_train, \
-                        train_num, ite_num, running_loss / ite_num4val,\
-                             running_tar_loss / ite_num4val))
+                        train_num, ite_num, loss2.item(),\
+                             loss.item()))
 
             if ite_num % save_frq == 0:
                 net.eval()
-                validate(val_salobj_dataloader, net, device, epoch, ite_num)
+                # val_loss0, val_loss_sum = validate(val_salobj_dataloader, net, device, epoch, ite_num)
 
-                torch.save(
-                    net.state_dict(), 
-                    model_dir + model_name+"_bce_itr_%d_train_%3f_tar_%3f.pth" % (\
-                        ite_num, running_loss / ite_num4val, running_tar_loss / ite_num4val))
+                # torch.save(
+                #     net.state_dict(), 
+                #     model_dir + model_name+"_bce_itr_%d_train_%3f_tar_%3f.pth" % (\
+                #         ite_num, running_loss / ite_num4val, running_tar_loss / ite_num4val))
 
+                val_loss0, val_loss_sum = loss2.item(), loss.item()
                 save_checkpoint(
                     os.path.join(model_dir, \
-                    f"{model_name}_bce_itr_{ite_num}_train_{running_loss / ite_num4val}_tar_{running_tar_loss / ite_num4val}.pth"),
+                    f"{model_name}_bce_itr_{ite_num}_trainloss_{round(val_loss0, 3)}_tar_{round(val_loss_sum, 3)}.pth"),
                     net, epoch=epoch, step=ite_num)
 
-                running_loss = 0.0
-                running_tar_loss = 0.0
+                # running_loss = 0.0
+                # running_tar_loss = 0.0
                 net.train()  # resume train
-                ite_num4val = 0
+                # ite_num4val = 0
             # net.train()
 
 

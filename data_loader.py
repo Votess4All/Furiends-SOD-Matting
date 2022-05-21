@@ -30,10 +30,29 @@ class ChangeBG(object):
 		imidx, image, label = sample['imidx'], sample['image'], sample['label']
 		bg_path = random.choice(self.bg_list)
 		bg_arr = cv2.imread(bg_path)
-		bg_arr = cv2.cvtColor(bg_arr, cv2.COLOR_BGR2RGB)
-		bg_arr = cv2.resize(bg_arr, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_LINEAR)
+		img_h, img_w = image.shape[:2]
+		bg_h, bg_w = bg_arr.shape[:2]
 
-		composed = image * (label / 255.0) + bg_arr * (1 - label / 255.0)
+		# 如果背景的最长边比图片的最长边要大，那就讲图片resize到比背景小的程度或者浮动
+		if max(bg_h, bg_w) > max(img_h, img_w):
+			scale_factor = random.choice([i / 10.0 for i in range(5, max(bg_h// img_h, bg_w//img_w) * 10)])
+			image = cv2.resize(image, dsize=None, fx=scale_factor, fy=scale_factor)
+			label = cv2.resize(label, dsize=None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_CUBIC)[..., np.newaxis]
+			sample["label"] = label
+		else:
+			scale_factor = random.choice([i / 10.0 for i in range(int(max(img_h/bg_h, img_w/bg_w) * 10),  int(max(img_h/bg_h, img_w/bg_w) * 20))])
+			bg_arr = cv2.resize(bg_arr, dsize=None, fx=scale_factor, fy=scale_factor)
+		
+		img_h, img_w = image.shape[:2]
+		bg_h, bg_w = bg_arr.shape[:2]
+		
+		bg_pil = Image.fromarray(bg_arr)
+		img_pil = Image.fromarray(image)
+		
+		top_left = (random.randint(0, max((bg_w-img_w)//2, 1)), random.randint(0, max((bg_h-img_h)//2, 1)))
+		bg_pil.paste(img_pil, top_left, Image.fromarray(label[...,0]))
+		composed = np.array(bg_pil)
+
 		sample['image'] = composed.astype(np.uint8)
 		return sample
 
@@ -47,11 +66,11 @@ class RandomFlip(object):
 
 		imidx, image, label = sample['imidx'], sample['image'], sample['label']
 		hflip = self.hflip and random.random() < 0.5
-		vflip = self.rot and random.random() < 0.5
-		rot90 = self.rot and random.random() < 0.5
+		vflip = self.rot and random.random() < 0.3
+		rot90 = self.rot and random.random() < 0.3
 
 		def _augment(img):
-			if hflip: img = img[:, ::-1, :]
+			if hflip: img = img[:, ::-1, :] 
 			if vflip: img = img[::-1, :, :]
 			if rot90: img = img.transpose(1, 0, 2)
 			
@@ -267,13 +286,48 @@ class ToTensorLab(object):
 				tmpImg[:,:,2] = (image[:,:,2]-0.406)/0.225
 
 		tmpLbl[:,:,0] = label[:,:,0]
-
-
 		tmpImg = tmpImg.transpose((2, 0, 1))
 		tmpLbl = label.transpose((2, 0, 1))
 
 		return {'imidx':torch.from_numpy(imidx), 'image': torch.from_numpy(tmpImg), 'label': torch.from_numpy(tmpLbl)}
 
+
+class ToTensorLab_Mat(object):
+	def __call__(self, sample):
+		imidx, image, label =sample['imidx'], sample['image'], sample['label']
+
+		tmpLbl = np.zeros(label.shape)
+
+		if(np.max(label)<1e-6):
+			label = label
+		else:
+			label = label/np.max(label)
+
+		tmpImg = np.zeros((image.shape[0], image.shape[1], 3))
+		image = image / np.max(image)
+		if image.shape[2] == 1:
+			tmpImg[:,:,0] = (image[:,:,0]-0.485)/0.229
+			tmpImg[:,:,1] = (image[:,:,0]-0.485)/0.229
+			tmpImg[:,:,2] = (image[:,:,0]-0.485)/0.229
+		else:
+			tmpImg[:,:,0] = (image[:,:,0]-0.485)/0.229
+			tmpImg[:,:,1] = (image[:,:,1]-0.456)/0.224
+			tmpImg[:,:,2] = (image[:,:,2]-0.406)/0.225	
+		
+		tmpLbl[:,:,0] = label[:,:,0]
+		tmpTrimap = tmpLbl.copy()
+		tmpTrimap[(0 < tmpTrimap) * (tmpTrimap < 1)] = 0.5
+		
+		tmpImg = tmpImg.transpose((2, 0, 1))
+		tmpLbl = label.transpose((2, 0, 1))
+		tmpTrimap = tmpTrimap.transpose((2, 0, 1))
+
+		return {
+			'imidx':torch.from_numpy(imidx), 
+			'image': torch.from_numpy(tmpImg), 
+			'trimap': torch.from_numpy(tmpTrimap), 
+			'gt_matte': torch.from_numpy(tmpLbl)
+		}
 
 class SalObjDataset(Dataset):
 	def __init__(self, img_name_list, lbl_name_list, transform=None):
@@ -321,6 +375,32 @@ class SalObjDataset(Dataset):
 		return sample
 
 
+class MatObjDataset(Dataset):
+	def __init__(self, img_name_list, lbl_name_list, transform=None):
+		self.image_name_list = img_name_list
+		self.label_name_list = lbl_name_list
+		self.transform = transform
+
+	def __len__(self):
+		return len(self.image_name_list)
+
+	def __getitem__(self,idx):
+
+		image = cv2.imread(self.image_name_list[idx])
+		imidx = np.array([idx])
+
+		if 0 == len(self.label_name_list):
+			label = np.zeros(image.shape)
+		else:
+			label = cv2.imread(self.label_name_list[idx], 0)[..., np.newaxis]
+
+		sample = {'imidx':imidx, 'image':image, 'label':label}
+
+		if self.transform:
+			sample = self.transform(sample)
+
+		return sample
+
 def check_dataset():
 	import utils.image_utils as image_utils
 	import shutil 
@@ -341,25 +421,28 @@ def check_dataset():
 	tra_lbl_name_list = glob.glob(os.path.join(data_dir, tra_label_dir, '*'+label_ext)) 
 	tra_lbl_name_list.sort()
 
-	salobj_dataset = SalObjDataset(
+	salobj_dataset = MatObjDataset(
 	img_name_list=tra_img_name_list,
 	lbl_name_list=tra_lbl_name_list,
 	transform=transforms.Compose([
-		ChangeBG(bg_dir="/data/docker/pengyuyan/dataset/google_image_downloader/furiends"),
-		RescaleT(320),
+		ChangeBG(bg_dir="/data/docker/pengyuyan/dataset/google_image_downloader/furiends/bg"),
+		RescaleT(320),		
 		RandomCrop(288),
 		RandomFlip(),
-		ToTensorLab(flag=0)]))
+		ToTensorLab_Mat()]))
 
 	NUM_SAMPLES = 20	
 	for i, data in enumerate(salobj_dataset):
 		input = data["image"]
-		label = data["label"]
+		trimap = data["trimap"]
+		gt_matte = data["gt_matte"]
 		img = image_utils.tensor2uint(input)
-		label = image_utils.tensor2uint_label(label)
-		img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+		trimap = image_utils.tensor2uint_label(trimap)
+		gt_matte = image_utils.tensor2uint_label(gt_matte)
+		# img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 		cv2.imwrite(f"./augment/org_{i}.jpg", img)
-		cv2.imwrite(f"./augment/label_{i}.png", label)
+		cv2.imwrite(f"./augment/trimap_{i}.png", trimap)
+		cv2.imwrite(f"./augment/gt_matte_{i}.png", gt_matte)
 		if i >= NUM_SAMPLES:
 			break
 	
