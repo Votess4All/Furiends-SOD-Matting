@@ -24,15 +24,15 @@ def save_output(image_name, img_org, pred, d_dir):
     org_shape = img_org.shape[:2]
     predict = pred.squeeze()
     predict_np = predict.cpu().data.numpy()
-    predict_np = predict_np * 255
+    predict_np = predict_np
     predict_np = cv2.resize(predict_np, (
-        org_shape[1], org_shape[0]), interpolation=cv2.INTER_LINEAR)
+        org_shape[1], org_shape[0]), interpolation=cv2.INTER_CUBIC)
 
     composed = postprocess_composed(predict_np, img_org)
     concat_result = np.concatenate([img_org, composed], axis=1)
 
     img_name = os.path.splitext(os.path.basename(image_name))[0]
-    cv2.imwrite(os.path.join(d_dir, img_name+".png"), predict_np)
+    cv2.imwrite(os.path.join(d_dir, img_name+".png"), (predict_np * 255).astype(np.uint8))
     # cv2.imwrite(os.path.join(d_dir, "composed_"+img_name+".jpg"), composed)
     cv2.imwrite(os.path.join(d_dir, "concat_"+img_name+".jpg"), concat_result)
 
@@ -50,7 +50,6 @@ def preprocess(image):
     
         return image
 
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     image = resize(image, (320, 320))
     image = normalize(image)
     image = image.transpose((2, 0, 1))
@@ -64,8 +63,8 @@ def postprocess_composed(predict, image_org):
     if predict.ndim == 2:
         predict = predict[..., np.newaxis]
 
-    composed = (predict / 255.0) * image_org +\
-         (1.0 - predict / 255.0) * np.array([255, 255, 255])
+    composed = predict * image_org +\
+         (1.0 - predict)  * np.array([255, 255, 255])
     return composed
 
 
@@ -94,10 +93,10 @@ def load_model(model_name, model_dir):
 @torch.no_grad()
 def main():
 
-    model_name = "u2net_bce_itr_1000_trainloss_0.201_tar_1.516.pth"  #u2netp
+    model_name = "u2net_epoch42_bce_itr_1500_trainloss_0.107_tar_0.932.pth"  #u2netp
     image_dir = os.path.join(os.getcwd(), 'test_data', 'furiends_test_images')
     prediction_dir = os.path.join(os.getcwd(), 'test_data', model_name + f'_results_{image_dir.split("/")[-1]}' + os.sep)
-    model_dir = "/data/docker/pengyuyan/models/u2net/0521_exp2_bg_augmented/"
+    model_dir = "/data/docker/pengyuyan/models/u2net/0528_exp1_ssim"
 
     img_name_list = glob.glob(image_dir + os.sep + '*')
     print(len(img_name_list))
@@ -111,7 +110,6 @@ def main():
         img_tensor = img_tensor.cuda()
 
         d1 = net(img_tensor)[0]
-
         pred = d1[:, 0, :, :]
         pred = norm_pred(pred)
 

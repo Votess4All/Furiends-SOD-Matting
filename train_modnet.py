@@ -7,60 +7,14 @@ from torchvision import transforms
 
 import wandb
 
-from data_loader import ChangeBG
-from data_loader import RandomCrop
-from data_loader import RandomFlip
-from data_loader import Rescale
-from data_loader import RescaleT
-from data_loader import MatObjDataset
-from data_loader import ToTensor
-from data_loader import ToTensorLab_Mat
-
 from src.models.modnet import MODNet
 from src.trainer import supervised_training_iter
+from u2net_train_aim2k import make_train_dataloader
 
 
 def get_lr(optimizer):
     for param_group in optimizer.param_groups:
         return param_group['lr']
-
-
-def make_train_dataloader(batch_size_train):
-    data_dir = "/data/docker/pengyuyan/dataset/AIM-2k"
-    tra_image_dir = "train/original"
-    tra_label_dir = "train/mask"
-    image_ext = '.jpg'
-    label_ext = '.png'
-    
-    tra_img_name_list = glob.glob(os.path.join(data_dir, tra_image_dir, '*'+image_ext))
-    tra_img_name_list.sort()
-
-    tra_lbl_name_list = glob.glob(os.path.join(data_dir, tra_label_dir, '*'+label_ext)) 
-    tra_lbl_name_list.sort()
-
-    print("---")
-    print("train images: ", len(tra_img_name_list))
-    print("train labels: ", len(tra_lbl_name_list))
-    print("---")
-
-    train_num = len(tra_img_name_list)
-
-    salobj_dataset = MatObjDataset(
-	img_name_list=tra_img_name_list,
-	lbl_name_list=tra_lbl_name_list,
-	transform=transforms.Compose([
-		ChangeBG(bg_dir="/data/docker/pengyuyan/dataset/google_image_downloader/furiends"),
-		RescaleT(320),
-		RandomCrop(288),
-		RandomFlip(),
-		ToTensorLab_Mat()])) 
-
-    salobj_dataloader = DataLoader(
-        salobj_dataset, 
-        batch_size=batch_size_train, 
-        shuffle=True, num_workers=16)
-
-    return train_num, salobj_dataloader
 
 
 def train():
@@ -120,7 +74,7 @@ def train():
         if epoch != 0 and (epoch + 1) % save_feq == 0:
             modnet.eval()
             torch.save(modnet.state_dict(), 
-                f"./modnet_epoch{epoch}_step{current_step}_seloss{round(semantic_loss.item(), 2)}_deloss_{round(detail_loss.item(), 2)}_matteloss{round(matte_loss.item(), 2)}.pth")
+                f"/data/docker/pengyuyan/models/modnet/modnet_epoch{epoch}_step{current_step}_seloss{round(semantic_loss.item(), 2)}_deloss_{round(detail_loss.item(), 2)}_matteloss{round(matte_loss.item(), 2)}.pth")
             modnet.train()
     
 if __name__ == "__main__":
