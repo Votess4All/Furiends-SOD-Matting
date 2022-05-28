@@ -15,7 +15,8 @@ import torchvision.transforms as standard_transforms
 
 import wandb
 
-from data_loader import ChangeBG
+from data_loader import ChangeBGWithDiverseScaleAndPosition
+from data_loader import ReplaceBG
 from data_loader import RandomCrop
 from data_loader import RandomFlip
 from data_loader import Rescale
@@ -27,80 +28,34 @@ from data_loader import ToTensorLab_Mat
 from model import U2NET
 from model import U2NETP
 
-from u2net_infer import norm_pred
-from u2net_infer import postprocess_composed
+from infer import norm_pred
+from infer import postprocess_composed
 import utils.image_utils as image_utils
+from utils.misc import get_learning_rate
+from utils.misc import load_checkpoint
+from utils.misc import save_checkpoint
+from utils.misc import concat_img
+from pytorch_msssim import msssim
 
 
 bce_loss = nn.BCELoss(size_average=True)
+mssim_loss = msssim
 
 def muti_bce_loss_fusion(d0, d1, d2, d3, d4, d5, d6, labels_v):
 
-	loss0 = bce_loss(d0, labels_v)
-	loss1 = bce_loss(d1, labels_v)
-	loss2 = bce_loss(d2, labels_v)
-	loss3 = bce_loss(d3, labels_v)
-	loss4 = bce_loss(d4, labels_v)
-	loss5 = bce_loss(d5, labels_v)
-	loss6 = bce_loss(d6, labels_v)
+    ssim_weight = 1.0
 
-	loss = loss0 + loss1 + loss2 + loss3 + loss4 + loss5 + loss6
+    loss0 = bce_loss(d0, labels_v) + ssim_weight * (1 - mssim_loss(d0, labels_v, normalize="relu"))
+    loss1 = bce_loss(d1, labels_v) + ssim_weight * (1 - mssim_loss(d1, labels_v, normalize="relu"))
+    loss2 = bce_loss(d2, labels_v) + ssim_weight * (1 - mssim_loss(d2, labels_v, normalize="relu"))
+    loss3 = bce_loss(d3, labels_v) + ssim_weight * (1 - mssim_loss(d3, labels_v, normalize="relu"))
+    loss4 = bce_loss(d4, labels_v) + ssim_weight * (1 - mssim_loss(d4, labels_v, normalize="relu"))
+    loss5 = bce_loss(d5, labels_v) + ssim_weight * (1 - mssim_loss(d5, labels_v, normalize="relu"))
+    loss6 = bce_loss(d6, labels_v) + ssim_weight * (1 - mssim_loss(d6, labels_v, normalize="relu"))
 
-	return loss0, loss
+    loss = loss0 + loss1 + loss2 + loss3 + loss4 + loss5 + loss6
 
-
-def save_checkpoint(
-    path, model, 
-    optimizer=None, scheduler=None, 
-    epoch=None, step=None, loss=None):
-
-    ckpt = {
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict() if optimizer is not None else None,
-        "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
-        "epoch": epoch,
-        "step": step,
-        "loss": loss
-    }
-    torch.save(ckpt, path)
-
-
-def load_checkpoint(path, model, device="cuda:0", optimizer=None, scheduler=None):
-    """
-    https://pytorch.org/docs/stable/generated/torch.load.html
-    When you call torch.load() on a file which contains GPU tensors, those tensors will be loaded to GPU by default. 
-    You can call torch.load(.., map_location='cpu') and then load_state_dict() to avoid GPU RAM 
-    surge when loading a model checkpoint.
-    """
-
-    ckpt = torch.load(path, map_location=device)
-    model.load_state_dict(ckpt["model_state_dict"], strict=True)
-
-    if optimizer:
-        if ckpt["optimizer_state_dict"]:
-            optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-
-    if scheduler:
-        if ckpt["scheduler_state_dict"]:
-            scheduler.load_state_dict(ckpt["scheduler_state_dict"])
-
-    epoch = ckpt["epoch"] if "epoch" in ckpt else 0
-    step = ckpt["step"] if "step" in ckpt else 0
-    loss = ckpt["loss"] if "loss" in ckpt else float("inf")
-
-    return epoch, step, loss
-
-
-
-def concat_img(img_list):
-    h = max([img.shape[0] for img in img_list]) 
-    w = sum([img.shape[1] for img in img_list])
-    result_img = np.zeros((h, w, 3))
-    start_h, start_w = 0, 0
-    for img in img_list:
-        result_img[start_h:start_h+img.shape[0], start_w:start_w+img.shape[1], :] = img
-        start_w += img.shape[1] 
-    return result_img
+    return loss0, loss
 
 
 @torch.no_grad()
@@ -111,14 +66,14 @@ def validate(val_loader, net, device, epoch, step):
 
     for data in tqdm(val_loader):
 
-        input, label = data['image'], data['label']
+        image, mask = data['image'], data['gt_matte']
 
-        input = input.type(torch.FloatTensor)
-        label = label.type(torch.FloatTensor) 
+        image = image.type(torch.FloatTensor)
+        mask = mask.type(torch.FloatTensor) 
 
         # wrap them in Variable
         if torch.cuda.is_available():
-            inputs_v, labels_v = input.to(device), label.to(device)
+            inputs_v, labels_v = image.to(device), mask.to(device)
 
         # forward + backward + optimize
         d0, d1, d2, d3, d4, d5, d6 = net(inputs_v)
@@ -129,12 +84,12 @@ def validate(val_loader, net, device, epoch, step):
 
         pred = d1[:, 0, :, :]
         pred = norm_pred(pred)
-        predict, label = pred.squeeze(), label.squeeze()
-        predict_np, label = predict.cpu().data.numpy()[..., np.newaxis], label.cpu().data.numpy()[..., np.newaxis]
-        predict_np, label = predict_np * 255, label * 255
-        input = image_utils.tensor2uint(input)
-        composed = postprocess_composed(predict_np, input).astype(np.uint8)
-        stacked_img = concat_img([input, label, predict_np, composed])
+        predict, mask = pred.squeeze(), mask.squeeze()
+        predict_np, mask = predict.cpu().data.numpy()[..., np.newaxis], mask.cpu().data.numpy()[..., np.newaxis]
+        image = image_utils.tensor2uint(image)
+        composed = postprocess_composed(predict_np, image).astype(np.uint8)
+        predict_np, mask = predict_np * 255, mask * 255
+        stacked_img = concat_img([image, mask, predict_np, composed])
         stack_images.append(stacked_img)
 
     wandb_dict = {
@@ -159,6 +114,7 @@ def get_train_list(data_dir, tra_image_dir, tra_label_dir, image_ext='.jpg', lab
 
 
 def make_train_dataloader(batch_size_train):
+
     train_datasets = {
         "AIM-train": {
             "data_dir":"/data/docker/pengyuyan/dataset/AIM-2k",
@@ -176,10 +132,40 @@ def make_train_dataloader(batch_size_train):
             "tra_label_dir": "masks",
         },
         "google-stray-dogs-hd": {
-            "data_dir": "/data/docker/pengyuyan/dataset/google_image_downloader/furiends/stray_dogs_hd",
+            "data_dir": "/data/docker/pengyuyan/dataset/google_image_downloader/furiends/stray_dogs_hd_formatted/",
             "tra_image_dir": "images",
             "tra_label_dir": "masks",
         },
+        "google-stray-cats-hd": {
+            "data_dir": "/data/docker/pengyuyan/dataset/google_image_downloader/furiends/stray_cats_hd_formatted/",
+            "tra_image_dir": "images",
+            "tra_label_dir": "masks",
+        },
+        "google-stray-dogs-hd2": {
+            "data_dir": "/data/docker/pengyuyan/dataset/google_image_downloader/furiends/stray_dogs_hd2_formatted/",
+            "tra_image_dir": "images",
+            "tra_label_dir": "masks",
+        },
+        "google-stray-dogs-hd2": {
+            "data_dir": "/data/docker/pengyuyan/dataset/google_image_downloader/furiends/stray_cats_hd2_formatted/",
+            "tra_image_dir": "images",
+            "tra_label_dir": "masks",
+        },
+        "overhead-shot-dog": {
+            "data_dir": "/data/docker/pengyuyan/dataset/google_image_downloader/furiends/overhead_shot_dog_formatted/",
+            "tra_image_dir": "images",
+            "tra_label_dir": "masks",
+        },
+        "overhead-shot-cat": {
+            "data_dir": "/data/docker/pengyuyan/dataset/google_image_downloader/furiends/overhead_shot_cat_formatted",
+            "tra_image_dir": "images",
+            "tra_label_dir": "masks",
+        },
+        "kitten": {
+            "data_dir": "/data/docker/pengyuyan/dataset/google_image_downloader/furiends/kitten_formated",
+            "tra_image_dir": "images",
+            "tra_label_dir": "masks",
+        }
     }
 
     tra_img_name_list, tra_lbl_name_list = [], []
@@ -201,7 +187,7 @@ def make_train_dataloader(batch_size_train):
 	img_name_list=tra_img_name_list,
 	lbl_name_list=tra_lbl_name_list,
 	transform=transforms.Compose([
-		ChangeBG(bg_dir="/data/docker/pengyuyan/dataset/google_image_downloader/furiends/bg"),
+		# ChangeBG(bg_dir="/data/docker/pengyuyan/dataset/google_image_downloader/furiends/bg"),
 		RescaleT(320),
 		RandomCrop(288),
 		RandomFlip(),
@@ -215,39 +201,39 @@ def make_train_dataloader(batch_size_train):
     return train_num, salobj_dataloader
 
 
-# def make_val_dataloader(batch_size_val):
-#     data_dir = "/data/docker/pengyuyan/dataset/AIM-2k"
-#     val_image_dir = "validation/original"
-#     val_label_dir = "validation/mask"
-#     image_ext = '.jpg'
-#     label_ext = '.png'
+def make_val_dataloader(batch_size_val):
+    data_dir = "/data/docker/pengyuyan/dataset/google_image_downloader/furiends/validation/furiends_test1"
+    val_image_dir = "images"
+    val_label_dir = "masks"
+    image_ext = '.jpg'
+    label_ext = '.png'
     
-#     val_img_name_list = glob.glob(os.path.join(data_dir, val_image_dir, '*'+image_ext))
-#     val_img_name_list.sort()
+    val_img_name_list = glob.glob(os.path.join(data_dir, val_image_dir, '*'+image_ext))
+    val_img_name_list.sort()
 
-#     val_lbl_name_list = glob.glob(os.path.join(data_dir, val_label_dir, '*'+label_ext)) 
-#     val_lbl_name_list.sort()
+    val_lbl_name_list = glob.glob(os.path.join(data_dir, val_label_dir, '*'+label_ext)) 
+    val_lbl_name_list.sort()
 
-#     print("---")
-#     print("val images: ", len(val_img_name_list))
-#     print("val labels: ", len(val_lbl_name_list))
-#     print("---")
+    print("---")
+    print("val images: ", len(val_img_name_list))
+    print("val labels: ", len(val_lbl_name_list))
+    print("---")
 
-#     val_num = len(val_img_name_list)
+    val_num = len(val_img_name_list)
 
-#     salobj_dataset = SalObjDataset(
-#     img_name_list=val_img_name_list,
-#     lbl_name_list=val_lbl_name_list,
-#     transform=transforms.Compose([
-#         RescaleT(320),
-#         ToTensorLab(flag=0)]))
+    salobj_dataset = MatObjDataset(
+    img_name_list=val_img_name_list,
+    lbl_name_list=val_lbl_name_list,
+    transform=transforms.Compose([
+        RescaleT(320),
+        ToTensorLab_Mat()]))
 
-#     salobj_dataloader = DataLoader(
-#         salobj_dataset, 
-#         batch_size=batch_size_val, 
-#         shuffle=False, num_workers=1)
+    salobj_dataloader = DataLoader(
+        salobj_dataset, 
+        batch_size=batch_size_val, 
+        shuffle=False, num_workers=1)
 
-#     return val_num, salobj_dataloader
+    return val_num, salobj_dataloader
 
 
 def train():
@@ -263,7 +249,7 @@ def train():
 
     # ------- 2. set the directory of training dataset --------
     model_name = 'u2net' #'u2netp'
-    model_dir = os.path.join(f"/data/docker/pengyuyan/models/{model_name}/0521_exp2_bg_augmented/")
+    model_dir = os.path.join(f"/data/docker/pengyuyan/models/{model_name}/0528_exp1_ssim/")
     os.makedirs(model_dir, exist_ok=True)
 
     epoch_num = 100000
@@ -271,34 +257,31 @@ def train():
     batch_size_val = 1
 
     train_num, train_salobj_dataloader = make_train_dataloader(batch_size_train)
-    # val_num, val_salobj_dataloader = make_val_dataloader(batch_size_val)
+    val_num, val_salobj_dataloader = make_val_dataloader(batch_size_val)
     
     # ------- 3. define model --------
     # define the net
     if model_name == 'u2net':
         start_epoch, start_step = 0, 0
         net = U2NET(3, 1)
-        net.load_state_dict(torch.load("saved_models/u2net/u2net.pth", map_location=device), strict=True)
+        # net.load_state_dict(torch.load("saved_models/u2net/u2net.pth", map_location=device), strict=True)
 
-        # start_epoch, step, _ = load_checkpoint("/data/docker/pengyuyan/models/u2net/0521_exp1_bg_augmented/u2net_bce_itr_12000_trainloss_0.022_tar_0.219.pth", net, device=device)
+        start_epoch, step, _ = load_checkpoint("/data/docker/pengyuyan/models/u2net/0528_exp1_ssim/u2net_epoch34_bce_itr_6500_trainloss_0.101_tar_0.886.pth", net, device=device)
 
     elif(model_name == 'u2netp'):
         net = U2NETP(3,1)
 
-    
     if torch.cuda.is_available():
         net.to(device)
 
     # ------- 4. define optimizer --------
     print("---define optimizer...")
-    optimizer = optim.Adam(net.parameters(), lr=1e-2, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
+    optimizer = optim.Adam(net.parameters(), lr=1e-4, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
+    # scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[10, 30, 50], gamma=0.1)
 
     # ------- 5. training process --------
     print("---start training...")
     ite_num = 0
-    # running_loss = 0.0
-    # running_tar_loss = 0.0
-    # ite_num4val = 0
     save_frq = 500 # save the model every 2000 iterations
     log_interval = 10
 
@@ -307,36 +290,29 @@ def train():
 
         for i, data in enumerate(train_salobj_dataloader):
             ite_num = ite_num + 1
-            # ite_num4val = ite_num4val + 1
 
-            inputs, labels = data['image'], data['gt_matte']
+            images, masks = data['image'], data['gt_matte']
 
-            inputs = inputs.type(torch.FloatTensor)
-            labels = labels.type(torch.FloatTensor)
+            images = images.type(torch.FloatTensor)
+            masks = masks.type(torch.FloatTensor)
 
-            # wrap them in Variable
             if torch.cuda.is_available():
-                inputs_v, labels_v = inputs.to(device), labels.to(device)
+                inputs_v, labels_v = images.to(device), masks.to(device)
 
-            # y zero the parameter gradients
             optimizer.zero_grad()
 
-            # forward + backward + optimize
             d0, d1, d2, d3, d4, d5, d6 = net(inputs_v)
             loss2, loss = muti_bce_loss_fusion(d0, d1, d2, d3, d4, d5, d6, labels_v)
 
             loss.backward()
             optimizer.step()
 
-            # # # print statistics
-            # running_loss += loss.item()
-            # running_tar_loss += loss2.item()
-
             wandb_dict = {
                 "train/global_epoch": epoch + 1,
                 "train/global_step": ite_num,
                 "train/loss0": loss2.item(),
                 "train/sum_loss": loss.item(),
+                "train/lr": get_learning_rate(optimizer),
             }
             wandb.log(wandb_dict)
 
@@ -348,24 +324,16 @@ def train():
 
             if ite_num % save_frq == 0:
                 net.eval()
-                # val_loss0, val_loss_sum = validate(val_salobj_dataloader, net, device, epoch, ite_num)
+                val_loss0, val_loss_sum = validate(val_salobj_dataloader, net, device, epoch, ite_num)
 
-                # torch.save(
-                #     net.state_dict(), 
-                #     model_dir + model_name+"_bce_itr_%d_train_%3f_tar_%3f.pth" % (\
-                #         ite_num, running_loss / ite_num4val, running_tar_loss / ite_num4val))
-
-                val_loss0, val_loss_sum = loss2.item(), loss.item()
+                # val_loss0, val_loss_sum = loss2.item(), loss.item()
                 save_checkpoint(
                     os.path.join(model_dir, \
-                    f"{model_name}_bce_itr_{ite_num}_trainloss_{round(val_loss0, 3)}_tar_{round(val_loss_sum, 3)}.pth"),
+                    f"{model_name}_epoch{epoch}_bce_itr_{ite_num}_trainloss_{round(val_loss0, 3)}_tar_{round(val_loss_sum, 3)}.pth"),
                     net, epoch=epoch, step=ite_num)
 
-                # running_loss = 0.0
-                # running_tar_loss = 0.0
                 net.train()  # resume train
-                # ite_num4val = 0
-            # net.train()
+        # scheduler.step()
 
 
 if __name__ == "__main__":

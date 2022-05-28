@@ -316,7 +316,6 @@ class ToTensorLab(object):
 		return {'imidx':torch.from_numpy(imidx), 'image': torch.from_numpy(tmpImg), 'label': torch.from_numpy(tmpLbl)}
 
 
-
 class ToTensorLab_Mat(object):
 	def __call__(self, sample):
 		imidx, image, label =sample['imidx'], sample['image'], sample['label']
