@@ -18,7 +18,7 @@ import utils.file_utils as file_utils
 
 
 #==========================dataset load==========================
-class ChangeBG(object):
+class ReplaceBG(object):
 	def __init__(self, bg_dir, prob=0.5):
 		self.bg_list = file_utils.get_files_recursively(bg_dir)
 		self.prob = prob
@@ -30,30 +30,54 @@ class ChangeBG(object):
 		imidx, image, label = sample['imidx'], sample['image'], sample['label']
 		bg_path = random.choice(self.bg_list)
 		bg_arr = cv2.imread(bg_path)
+		bg_arr = cv2.resize(bg_arr, (image.shape[1], image.shape[0]))
+
+		composed = (label / 255.0) * image + (1.0 - label / 255.0) * bg_arr
+		sample["image"] = composed
+
+		return sample
+
+
+class ChangeBGWithDiverseScaleAndPosition(object):
+	def __init__(self, bg_dir, prob=0.5):
+		self.bg_list = file_utils.get_files_recursively(bg_dir)
+		self.prob = prob
+	
+	def __call__(self, sample):
+		if random.random() > self.prob:
+			return sample
+
+		_, image, label = sample['imidx'], sample['image'], sample['label']
+		bg_path = random.choice(self.bg_list)
+		bg_arr = cv2.imread(bg_path)
 		img_h, img_w = image.shape[:2]
 		bg_h, bg_w = bg_arr.shape[:2]
 
 		# 如果背景的最长边比图片的最长边要大，那就讲图片resize到比背景小的程度或者浮动
 		if max(bg_h, bg_w) > max(img_h, img_w):
-			scale_factor = random.choice([i / 10.0 for i in range(5, max(bg_h// img_h, bg_w//img_w) * 10)])
+			base_scale = max(bg_h/ img_h, bg_w/img_w)
+			scale_factor = random.choice([i / 10.0 for i in range(int(base_scale * 5), int(base_scale * 10))])
 			image = cv2.resize(image, dsize=None, fx=scale_factor, fy=scale_factor)
 			label = cv2.resize(label, dsize=None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_CUBIC)[..., np.newaxis]
-			sample["label"] = label
 		else:
-			scale_factor = random.choice([i / 10.0 for i in range(int(max(img_h/bg_h, img_w/bg_w) * 10),  int(max(img_h/bg_h, img_w/bg_w) * 20))])
+			base_scale = max(img_h/bg_h, img_w/bg_w)
+			scale_factor = random.choice([i / 10.0 for i in range(int(base_scale * 10),  int(base_scale * 20))])
 			bg_arr = cv2.resize(bg_arr, dsize=None, fx=scale_factor, fy=scale_factor)
 		
 		img_h, img_w = image.shape[:2]
 		bg_h, bg_w = bg_arr.shape[:2]
 		
 		bg_pil = Image.fromarray(bg_arr)
+		label_pil = Image.fromarray(np.zeros(bg_arr.shape[:2], dtype=np.uint8))
 		img_pil = Image.fromarray(image)
 		
 		top_left = (random.randint(0, max((bg_w-img_w)//2, 1)), random.randint(0, max((bg_h-img_h)//2, 1)))
 		bg_pil.paste(img_pil, top_left, Image.fromarray(label[...,0]))
-		composed = np.array(bg_pil)
+		label_pil.paste(Image.fromarray(label[..., 0]), top_left, Image.fromarray(label[...,0]))
 
-		sample['image'] = composed.astype(np.uint8)
+		sample['image'] = np.array(bg_pil).astype(np.uint8)
+		sample["label"] = np.array(label_pil).astype(np.uint8)[..., np.newaxis]
+
 		return sample
 
 
@@ -66,8 +90,8 @@ class RandomFlip(object):
 
 		imidx, image, label = sample['imidx'], sample['image'], sample['label']
 		hflip = self.hflip and random.random() < 0.5
-		vflip = self.rot and random.random() < 0.3
-		rot90 = self.rot and random.random() < 0.3
+		vflip = self.rot and random.random() < 0.5
+		rot90 = self.rot and random.random() < 0.5
 
 		def _augment(img):
 			if hflip: img = img[:, ::-1, :] 
@@ -292,6 +316,7 @@ class ToTensorLab(object):
 		return {'imidx':torch.from_numpy(imidx), 'image': torch.from_numpy(tmpImg), 'label': torch.from_numpy(tmpLbl)}
 
 
+
 class ToTensorLab_Mat(object):
 	def __call__(self, sample):
 		imidx, image, label =sample['imidx'], sample['image'], sample['label']
@@ -304,7 +329,7 @@ class ToTensorLab_Mat(object):
 			label = label/np.max(label)
 
 		tmpImg = np.zeros((image.shape[0], image.shape[1], 3))
-		image = image / np.max(image)
+		image = image / 255.0
 		if image.shape[2] == 1:
 			tmpImg[:,:,0] = (image[:,:,0]-0.485)/0.229
 			tmpImg[:,:,1] = (image[:,:,0]-0.485)/0.229
@@ -326,8 +351,9 @@ class ToTensorLab_Mat(object):
 			'imidx':torch.from_numpy(imidx), 
 			'image': torch.from_numpy(tmpImg), 
 			'trimap': torch.from_numpy(tmpTrimap), 
-			'gt_matte': torch.from_numpy(tmpLbl)
+			'gt_matte': torch.from_numpy(tmpLbl.copy())
 		}
+
 
 class SalObjDataset(Dataset):
 	def __init__(self, img_name_list, lbl_name_list, transform=None):
@@ -425,13 +451,13 @@ def check_dataset():
 	img_name_list=tra_img_name_list,
 	lbl_name_list=tra_lbl_name_list,
 	transform=transforms.Compose([
-		ChangeBG(bg_dir="/data/docker/pengyuyan/dataset/google_image_downloader/furiends/bg"),
-		RescaleT(320),		
-		RandomCrop(288),
+		ChangeBGWithDiverseScaleAndPosition(bg_dir="/data/docker/pengyuyan/dataset/google_image_downloader/furiends/bg", prob=1.0),
+		RescaleT(640),		
+		RandomCrop(576),
 		RandomFlip(),
 		ToTensorLab_Mat()]))
 
-	NUM_SAMPLES = 20	
+	NUM_SAMPLES = 10
 	for i, data in enumerate(salobj_dataset):
 		input = data["image"]
 		trimap = data["trimap"]
@@ -439,7 +465,7 @@ def check_dataset():
 		img = image_utils.tensor2uint(input)
 		trimap = image_utils.tensor2uint_label(trimap)
 		gt_matte = image_utils.tensor2uint_label(gt_matte)
-		# img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+		img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 		cv2.imwrite(f"./augment/org_{i}.jpg", img)
 		cv2.imwrite(f"./augment/trimap_{i}.png", trimap)
 		cv2.imwrite(f"./augment/gt_matte_{i}.png", gt_matte)
