@@ -165,6 +165,11 @@ def make_train_dataloader(batch_size_train):
             "data_dir": "/data/docker/pengyuyan/dataset/google_image_downloader/furiends/kitten_formated",
             "tra_image_dir": "images",
             "tra_label_dir": "masks",
+        },
+        "stray-cats-20220603": {
+            "data_dir": "/data/docker/pengyuyan/dataset/google_image_downloader/furiends/stray_cats_20220603_formated",
+            "tra_image_dir": "images",
+            "tra_label_dir": "masks",
         }
     }
 
@@ -249,7 +254,7 @@ def train():
 
     # ------- 2. set the directory of training dataset --------
     model_name = 'u2net' #'u2netp'
-    model_dir = os.path.join(f"/data/docker/pengyuyan/models/{model_name}/0528_exp1_ssim/")
+    model_dir = os.path.join(f"/data/docker/pengyuyan/models/{model_name}/0605_exp1_ssim/")
     os.makedirs(model_dir, exist_ok=True)
 
     epoch_num = 100000
@@ -264,9 +269,9 @@ def train():
     if model_name == 'u2net':
         start_epoch, start_step = 0, 0
         net = U2NET(3, 1)
-        # net.load_state_dict(torch.load("saved_models/u2net/u2net.pth", map_location=device), strict=True)
+        net.load_state_dict(torch.load("saved_models/u2net/u2net.pth", map_location=device), strict=True)
 
-        start_epoch, step, _ = load_checkpoint("/data/docker/pengyuyan/models/u2net/0528_exp1_ssim/u2net_epoch34_bce_itr_6500_trainloss_0.101_tar_0.886.pth", net, device=device)
+        # start_epoch, step, _ = load_checkpoint("/data/docker/pengyuyan/models/u2net/0528_exp1_ssim/u2net_epoch34_bce_itr_6500_trainloss_0.101_tar_0.886.pth", net, device=device)
 
     elif(model_name == 'u2netp'):
         net = U2NETP(3,1)
@@ -277,7 +282,6 @@ def train():
     # ------- 4. define optimizer --------
     print("---define optimizer...")
     optimizer = optim.Adam(net.parameters(), lr=1e-4, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
-    # scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[10, 30, 50], gamma=0.1)
 
     # ------- 5. training process --------
     print("---start training...")
@@ -333,7 +337,6 @@ def train():
                     net, epoch=epoch, step=ite_num)
 
                 net.train()  # resume train
-        # scheduler.step()
 
 
 if __name__ == "__main__":

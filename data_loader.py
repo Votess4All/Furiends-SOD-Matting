@@ -321,14 +321,11 @@ class ToTensorLab_Mat(object):
 		imidx, image, label =sample['imidx'], sample['image'], sample['label']
 
 		tmpLbl = np.zeros(label.shape)
-
-		if(np.max(label)<1e-6):
-			label = label
-		else:
-			label = label/np.max(label)
+		label = label / 255.0
 
 		tmpImg = np.zeros((image.shape[0], image.shape[1], 3))
 		image = image / 255.0
+		
 		if image.shape[2] == 1:
 			tmpImg[:,:,0] = (image[:,:,0]-0.485)/0.229
 			tmpImg[:,:,1] = (image[:,:,0]-0.485)/0.229
@@ -411,20 +408,17 @@ class MatObjDataset(Dataset):
 
 	def __getitem__(self,idx):
 
-		image = cv2.imread(self.image_name_list[idx])
+		image = cv2.imread(self.image_name_list[idx]).astype(np.float32)
 		imidx = np.array([idx])
-
-		if 0 == len(self.label_name_list):
-			label = np.zeros(image.shape)
-		else:
-			label = cv2.imread(self.label_name_list[idx], 0)[..., np.newaxis]
-
+		label = cv2.imread(self.label_name_list[idx], 0).astype(np.float32)[..., np.newaxis]
+			
 		sample = {'imidx':imidx, 'image':image, 'label':label}
 
 		if self.transform:
 			sample = self.transform(sample)
 
 		return sample
+
 
 def check_dataset():
 	import utils.image_utils as image_utils
